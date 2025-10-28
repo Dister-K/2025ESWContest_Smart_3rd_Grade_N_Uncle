@@ -40,6 +40,7 @@ AUDIO_FILES = {
     "smoking": _first_existing("smoking_tts.mp3", "smoking.mp3"),
     "alcohol": _first_existing("alcohol_tts.mp3", "Alcohol_tts.mp3", "alchol_tts.mp3"),
     "both":    _first_existing("smoking_and_alcohol_tts.mp3", "both.mp3"),
+    "warn":    _first_existing("uncertain.mp3", "warn_tts.mp3"),
 }
 
 # 디버그: 찾은 파일 보여주기
