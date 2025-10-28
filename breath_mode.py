@@ -39,6 +39,7 @@ AUDIO_FILES = {
     "normal":  _first_existing("normal_tts.mp3", "normal.mp3", "_normal_tts.mp3"),
     "smoking": _first_existing("smoking_tts.mp3", "smoking.mp3"),
     "alcohol": _first_existing("alcohol_tts.mp3", "Alcohol_tts.mp3", "alchol_tts.mp3"),
+    "both":    _first_existing("smoking_and_alcohol_tts.mp3", "both.mp3"),
 }
 
 # 디버그: 찾은 파일 보여주기
@@ -162,15 +163,41 @@ def beep_tone(duration=0.4, freq=850.0, volume=0.25, rate=44100):
 # =========================
 # (2) 알코올 의심 간단 감지
 # =========================
-ALC_RATIO_PEAK_MIN = 1.45
-ALC_RATIO_AUC_MIN  = 1.60
-ALC_RH_DELTA_MAX   = 3.0
+ALC_RATIO_PEAK_MIN = 1.25  
+ALC_RATIO_AUC_MIN  = 1.35  
+ALC_RH_DELTA_MAX   = 6.0 
 
 def classify_alcohol(*, ratio_peak, ratio_auc, rh_delta):
-    strong_eth = (ratio_peak is not None and ratio_peak >= ALC_RATIO_PEAK_MIN) or \
-                 (ratio_auc  is not None and ratio_auc  >= ALC_RATIO_AUC_MIN)
+    """
+    알코올 의심 판단:
+    - 에탄올 지표(ETH/ACE 비율 또는 AUC)가 완화된 기준 이상일 때
+    - 습도 변화량(RH delta)이 너무 크지 않을 때
+    """
+
+    # (1) 기준 완화 (기존 값보다 낮게 설정)
+    ALC_RATIO_PEAK_MIN = 1.15
+    ALC_RATIO_AUC_MIN = 1.00
+    ALC_RH_DELTA_MAX  = 5.0
+
+    # (2) ETH 지표가 우세한지 확인 (peak 또는 AUC 중 하나라도 기준 이상)
+    strong_eth = (
+        (ratio_peak is not None and ratio_peak >= ALC_RATIO_PEAK_MIN) or
+        (ratio_auc  is not None and ratio_auc  >= ALC_RATIO_AUC_MIN)
+    )
+
+    # (3) RH 변화량이 너무 크지 않은지
     rh_ok = True if rh_delta is None else (rh_delta <= ALC_RH_DELTA_MAX)
-    return bool(strong_eth and rh_ok)
+
+    # (4) 최종 판단
+    alcohol_flag = bool(strong_eth and rh_ok)
+
+    # (5) 디버그 로그
+    peak_str = f"{ratio_peak:.2f}" if ratio_peak is not None else "None"
+    auc_str  = f"{ratio_auc:.2f}" if ratio_auc is not None else "None"
+    rh_str   = f"{rh_delta:.2f}" if rh_delta is not None else "None"
+    print(f"[ALC_CHECK] ratio_peak={peak_str}, ratio_auc={auc_str}, RHΔ={rh_str}, flag={alcohol_flag}")
+
+    return alcohol_flag
 
 # =========================
 # (3) LED 시리얼 설정 
@@ -178,7 +205,7 @@ def classify_alcohol(*, ratio_peak, ratio_auc, rh_delta):
 PORT_LED = "/dev/cu.usbmodem11401" 
 BAUD_LED = 9600
 LED_SEND_MIN_INTERVAL = 0.20
-LED_AUTO_ON = False      # 기본 OFF (필요 시 True)
+LED_AUTO_ON = True
 
 LED_RESULT_FLASH_SEC = 10.0
 from serial.tools import list_ports
@@ -196,14 +223,14 @@ except ImportError:
 # (5) CONFIG (네가 준 mac 포트)
 # =========================
 PORT_VOC = "/dev/cu.usbmodem11101"    # BME688
-PORT_ACE = "/dev/cu.usbmodem1301"    # MICS-6814
+PORT_ACE = "/dev/cu.usbmodem1401"    # MICS-6814
 BAUD_VOC = 9600
 BAUD_ACE = 9600
 
 PRINT_HZ      = 2.0
 DEBUG_SPIKES  = False
 SENSOR_WATCHDOG_SEC = 3.5
-WARMUP_SEC    = 30.0
+WARMUP_SEC    = 25.0
 BASELINE_SEC  = 30.0
 
 EMA_ALPHA_WAIT   = 0.02
@@ -235,10 +262,10 @@ REFRACTORY_SEC       = 3.0
 BURST_MULTIPLIER     = 1.5
 ETH_DOMINANCE_RATIO  = 1.4
 
-SMK_ETH_PEAK_MIN     = 1.25
-SMK_ETH_AUC_MIN      = 0.25
-SMK_DOM_PEAK_MIN     = 1.15
-SMK_DOM_AUC_MIN      = 1.20
+SMK_ETH_PEAK_MIN     = 1.35
+SMK_ETH_AUC_MIN      = 0.30
+SMK_DOM_PEAK_MIN     = 1.20 
+SMK_DOM_AUC_MIN      = 1.25
 SMK_SLOPE_MIN        = 0.25
 SMK_EXHALE_MIN       = 0.70
 SMK_EXCLUDE_ACE_DOM_RATIO = 1.0/ETH_DOMINANCE_RATIO
@@ -475,9 +502,12 @@ def classify_smoking(*, peak_ace, peak_eth, auc_ace, auc_eth,
     if s_idx_peak is not None and s_idx_peak >= SMK_SLOPE_MIN:
         score += 1; reasons.append(f"idx_slope_max≥{SMK_SLOPE_MIN:.2f}/s")
 
-    if score >= 3:   return ("흡연 의심", ", ".join(reasons) or "규칙충족")
-    elif score == 2: return ("모호", ", ".join(reasons))
-    else:            return ("비의심", ", ".join(reasons) or "규칙미충족")
+    if score >= 3:
+        return ("흡연 의심", ", ".join(reasons) or "규칙충족")
+    elif score == 2:
+        return ("모호", ", ".join(reasons))
+    else:
+        return ("비의심", ", ".join(reasons) or "규칙미충족")
 
 def compute_srs(*, ratio_peak, eth_peak, ratio_auc, idx_slope_max):
     eth_dom      = scale_linear(ratio_peak,    1.05, 1.35)
@@ -538,14 +568,42 @@ class LEDSerial:
 
 def led_show_state(led: 'LEDSerial', state: str, sensor_ok: bool=True):
     return
+
 def led_show_timeout(led: 'LEDSerial'):
     return
-def led_show_result(led: 'LEDSerial', final_label: str, smoke_label: str):
+
+def led_show_result(led: 'LEDSerial', final_label: str, smoke_label: str, alcohol_flag=False):
+    print(f"[LED_DEBUG] smoke_label={smoke_label}, final_label={final_label}, alcohol_flag={alcohol_flag}")
     danger = (smoke_label == "흡연 의심") or (final_label in ("강한 비정상", "위험"))
-    warn   = (smoke_label == "모호") or (final_label in ("약한 반응", "모호", "주의"))
-    if danger:   led.send("R")
-    elif warn:   led.send("Y")
-    else:        led.send("G")
+    warn   = (smoke_label == "모호") or (final_label in ("약한 반응", "모호", "주의")) or alcohol_flag
+    print(f"[LED_DEBUG] danger={danger}, warn={warn}")
+    if danger:
+        led.send("R")
+    elif warn:
+        led.send("Y")
+    else:
+        led.send("G")
+
+def determine_result_label(smoke_label, final_label, alcohol_flag):
+    """
+    LED와 TTS 진단 기준을 통일하는 함수
+    (흡연·알코올·모호·약한 반응까지 모두 동일한 기준으로 LED/TTS 일치시킴)
+    """
+    # 1️⃣ 위험 단계 (빨강)
+    if smoke_label == "흡연 의심" and alcohol_flag:
+        return ("흡연+알코올", "R", AUDIO_FILES.get("both"))
+    elif smoke_label == "흡연 의심":
+        return ("흡연", "R", AUDIO_FILES.get("smoking"))
+    elif alcohol_flag:
+        return ("알코올", "R", AUDIO_FILES.get("alcohol"))
+
+    # 2️⃣ 주의 단계 (노랑)
+    elif smoke_label == "모호" or final_label in ("약한 반응", "모호", "주의"):
+        return ("주의", "Y", AUDIO_FILES.get("warn"))
+
+    # 3️⃣ 정상 단계 (초록)
+    else:
+        return ("정상", "G", AUDIO_FILES.get("normal"))
 
 # =========================
 # 메인 상태머신
@@ -829,20 +887,21 @@ def main():
                     rh_delta_txt = f"{rh_delta:.2f}" if rh_delta is not None else "NA"
                     print(f"[METRIC] EXHALE #{exhale_idx} -> SRS={srs} ({srs_label}), RQS={rqs} | dur={exhale_dur:.2f}s, RHΔ={rh_delta_txt}%, ETH/ACE peak={ratio_peak:.2f}, AUC={ratio_auc:.2f}, idx_slope_max={s_ace_idx_peak:.2f}/s")
 
-                    # === 결과 음성 (우선순위: 흡연 > 알코올 > 정상) ===
+                    # === LED + TTS 통합 진단 ===
                     try:
                         alcohol_flag = classify_alcohol(ratio_peak=ratio_peak, ratio_auc=ratio_auc, rh_delta=rh_delta)
                     except Exception:
                         alcohol_flag = False
-                    result_token = f"exhale#{exhale_idx}"
-                    if smoke_label == "흡연 의심" and AUDIO_FILES.get("smoking"):
-                        play_audio(AUDIO_FILES["smoking"], token=result_token)
-                    elif alcohol_flag and AUDIO_FILES.get("alcohol"):
-                        play_audio(AUDIO_FILES["alcohol"], token=result_token)
-                    elif AUDIO_FILES.get("normal"):
-                        play_audio(AUDIO_FILES["normal"], token=result_token)
-
-                    led_show_result(led, final_label, smoke_label)
+                    
+                    tts_label, led_code, tts_file = determine_result_label(smoke_label, final_label, alcohol_flag)
+                    print(f"[RESULT_LOGIC] tts_label={tts_label}, led={led_code}, tts_file={tts_file}")
+                    
+                    # TTS 출력
+                    if tts_file:
+                        play_audio(tts_file, token=f"exhale#{exhale_idx}")
+                    
+                    # LED 출력
+                    led.send(led_code)
 
                     if EXIT_AFTER_FIRST_EXHALE:
                         print("[EXIT] Single exhale complete — quitting this mode.")

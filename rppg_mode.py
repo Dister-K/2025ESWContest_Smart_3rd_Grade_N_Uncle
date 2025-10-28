@@ -492,7 +492,7 @@ with mp_face_mesh.FaceMesh(max_num_faces=1, min_detection_confidence=0.5, min_tr
 
         now = time.perf_counter()
         if now - t0 > 60:
-            print("[INFO] 1분 측정 완료. 결과를 출력합니다.")
+            print("[INFO] 60초 측정 완료. 결과를 출력합니다.")
             break
         if cheek_pixels is not None and cheek_pixels.size:
             skin_metrics, skin_labels = skin_tracker.update(cheek_pixels)
