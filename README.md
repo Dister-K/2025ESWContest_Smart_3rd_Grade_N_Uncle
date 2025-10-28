@@ -6,12 +6,12 @@
 
 
 # 이 콘텐츠는 인공지능 가상 연기자 서비스, 타입캐스트를 활용하여 제작되었습니다.
-출연진 : 재훈
+출연진 : 재훈 /
 https://typecast.ai/kr
 
 
 # This content was produced with Typecast, an AI virtual actor service.
-Characters casted : Jeahun
+Characters casted : Jeahun /
 https://typecast.ai
 
 이 프로젝트는 Typecast로 생성된 음성을 포함하였으나, 라이선스 문제로 GitHub에 포함하지 않습니다. 궁금하신 사항은 kkyy7677@gmail.com으로 연락 부탁드리겠습니다.
