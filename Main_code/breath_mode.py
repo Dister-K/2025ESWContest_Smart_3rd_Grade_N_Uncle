@@ -178,7 +178,7 @@ def classify_alcohol(*, ratio_peak, ratio_auc, rh_delta):
     # (1) 기준 완화 (기존 값보다 낮게 설정)
     ALC_RATIO_PEAK_MIN = 1.15
     ALC_RATIO_AUC_MIN = 1.00
-    ALC_RH_DELTA_MAX  = 5.0
+    ALC_RH_DELTA_MAX  = 50
 
     # (2) ETH 지표가 우세한지 확인 (peak 또는 AUC 중 하나라도 기준 이상)
     strong_eth = (
@@ -203,7 +203,7 @@ def classify_alcohol(*, ratio_peak, ratio_auc, rh_delta):
 # =========================
 # (3) LED 시리얼 설정 
 # =========================
-PORT_LED = "/dev/cu.usbmodem11401" 
+PORT_LED = "/dev/cu.usbmodem1401" 
 BAUD_LED = 9600
 LED_SEND_MIN_INTERVAL = 0.20
 LED_AUTO_ON = True
@@ -223,8 +223,8 @@ except ImportError:
 # =========================
 # (5) CONFIG (네가 준 mac 포트)
 # =========================
-PORT_VOC = "/dev/cu.usbmodem11101"    # BME688
-PORT_ACE = "/dev/cu.usbmodem1401"    # MICS-6814
+PORT_VOC = "/dev/cu.usbmodem11401"    # BME688
+PORT_ACE = "/dev/cu.usbmodem11101"    # MICS-6814
 BAUD_VOC = 9600
 BAUD_ACE = 9600
 
@@ -573,38 +573,31 @@ def led_show_state(led: 'LEDSerial', state: str, sensor_ok: bool=True):
 def led_show_timeout(led: 'LEDSerial'):
     return
 
-def led_show_result(led: 'LEDSerial', final_label: str, smoke_label: str, alcohol_flag=False):
-    print(f"[LED_DEBUG] smoke_label={smoke_label}, final_label={final_label}, alcohol_flag={alcohol_flag}")
-    danger = (smoke_label == "흡연 의심") or (final_label in ("강한 비정상", "위험"))
-    warn   = (smoke_label == "모호") or (final_label in ("약한 반응", "모호", "주의")) or alcohol_flag
-    print(f"[LED_DEBUG] danger={danger}, warn={warn}")
-    if danger:
+def led_show_result(led, smoke_label, final_label, alcohol_flag=False):
+    if alcohol_flag:
         led.send("R")
-    elif warn:
+        print("[LED] Alcohol detected → RED")
+    elif smoke_label == "흡연 의심" or final_label == "흡연 의심":
+        led.send("R")
+        print("[LED] Smoking suspected → RED")
+    elif smoke_label == "모호" or final_label in ("주의", "모호", "약한 반응"):
         led.send("Y")
+        print("[LED] Warning → YELLOW")
     else:
         led.send("G")
+        print("[LED] Normal → GREEN")
 
-def determine_result_label(smoke_label, final_label, alcohol_flag):
-    """
-    LED와 TTS 진단 기준을 통일하는 함수
-    (흡연·알코올·모호·약한 반응까지 모두 동일한 기준으로 LED/TTS 일치시킴)
-    """
-    # 1️⃣ 위험 단계 (빨강)
-    if smoke_label == "흡연 의심" and alcohol_flag:
-        return ("흡연+알코올", "R", AUDIO_FILES.get("both"))
-    elif smoke_label == "흡연 의심":
-        return ("흡연", "R", AUDIO_FILES.get("smoking"))
+def determine_final_result(smoke_label, final_label, alcohol_flag):
+    if alcohol_flag and smoke_label == "흡연 의심":
+        return "흡연+알코올", AUDIO_FILES.get("both")
     elif alcohol_flag:
-        return ("알코올", "R", AUDIO_FILES.get("alcohol"))
-
-    # 2️⃣ 주의 단계 (노랑)
-    elif smoke_label == "모호" or final_label in ("약한 반응", "모호", "주의"):
-        return ("주의", "Y", AUDIO_FILES.get("warn"))
-
-    # 3️⃣ 정상 단계 (초록)
+        return "알코올 의심", AUDIO_FILES.get("alcohol")
+    elif smoke_label == "흡연 의심":
+        return "흡연 의심", AUDIO_FILES.get("smoking")
+    elif smoke_label in ("모호",) or final_label in ("주의", "모호", "약한 반응"):
+        return "주의", AUDIO_FILES.get("warn")
     else:
-        return ("정상", "G", AUDIO_FILES.get("normal"))
+        return "정상", AUDIO_FILES.get("normal")
 
 # =========================
 # 메인 상태머신
@@ -894,21 +887,22 @@ def main():
                     except Exception:
                         alcohol_flag = False
                     
-                    tts_label, led_code, tts_file = determine_result_label(smoke_label, final_label, alcohol_flag)
-                    print(f"[RESULT_LOGIC] tts_label={tts_label}, led={led_code}, tts_file={tts_file}")
+                    # 1. TTS 판단
+                    tts_label, tts_file = determine_final_result(smoke_label, final_label, alcohol_flag)
                     
-                    # TTS 출력
+                    # 2. LED 점등
+                    led_show_result(led, tts_label, tts_label, alcohol_flag=alcohol_flag)
+                    
+                    # 3. TTS 출력
                     if tts_file:
                         play_audio(tts_file, token=f"exhale#{exhale_idx}")
                     
-                    # LED 출력
-                    led.send(led_code)
-
+                    # 4. 종료 조건
                     if EXIT_AFTER_FIRST_EXHALE:
                         print("[EXIT] Single exhale complete — quitting this mode.")
                         if AUDIO_GRACE_BEFORE_EXIT_SEC > 0:
                             time.sleep(AUDIO_GRACE_BEFORE_EXIT_SEC)
-                        break  # 메인 while 루프 탈출 → 아래 정리 코드 실행
+                        break
 
                     state = "WAIT"; state_ts = t
                     refractory_until = t + REFRACTORY_SEC
